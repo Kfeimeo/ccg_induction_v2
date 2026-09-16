@@ -2,9 +2,9 @@
 
 本文件里体现的设计决定（请确认）：
 1. 特征是原子身份的一部分：``S`` 与 ``S[dcl]`` 是两个不同原子（特征变量不在 M0）。
-2. 文本语法：斜线左结合；单个大写字母（可带数字）且非原子名 = 变量；``?<id>`` 引用已有变量。
+2. 文本语法：斜线左结合；变量一律带 sigil：``?X`` 是命名变量（同一 env 内同名同变量），``?<数字>`` 按 id 引用已有变量；裸大写一律是原子，不在原子集合内即报错。
 3. 复杂度：arity = 结果脊上的论元数；depth = 论元位置上的函子嵌套深度（原子论元不计）。
-4. ``MAX_ARITY = 4`` 对整棵树检查（论元内部超限同样不允许）。
+4. 分别设限：``MAX_ARITY = 4``、``MAX_DEPTH = 3``，``is_admissible`` 对整棵树检查（论元内部超限同样不允许）。
 """
 from dataclasses import FrozenInstanceError
 
@@ -13,6 +13,7 @@ import pytest
 from ccg_solver.category import (
     ATOMS,
     MAX_ARITY,
+    MAX_DEPTH,
     Atom,
     Functor,
     Var,
@@ -85,18 +86,18 @@ class TestVars:
 
     def test_parse_names_share_within_env(self):
         env: dict = {}
-        c1 = parse("S/X", env)
-        c2 = parse("X\\NP", env)
+        c1 = parse("S/?X", env)
+        c2 = parse("?X\\NP", env)
         assert isinstance(c1.arg, Var)
         assert c1.arg is c2.result
-        assert env["X"] is c1.arg
+        assert env["X"] is c1.arg  # env 的键不含 sigil
 
     def test_parse_same_name_in_one_call_is_one_var(self):
-        c = parse("X/X")
+        c = parse("?X/?X")
         assert c.result is c.arg
 
     def test_parse_without_env_is_fresh_across_calls(self):
-        assert parse("S/X").arg is not parse("S/X").arg
+        assert parse("S/?X").arg is not parse("S/?X").arg
 
     def test_parse_var_by_id(self):
         v = fresh_var()
@@ -104,7 +105,7 @@ class TestVars:
 
     def test_free_vars(self):
         env: dict = {}
-        c = parse("(X\\NP)/(Y/X)", env)
+        c = parse("(?X\\NP)/(?Y/?X)", env)
         assert free_vars(c) == {env["X"], env["Y"]}
         assert free_vars(parse("(S\\NP)/NP")) == set()
         v = fresh_var()
@@ -144,12 +145,12 @@ class TestParsePrint:
 
     def test_print_then_parse_preserves_vars(self):
         env: dict = {}
-        c = parse("(X\\NP)/Y", env)
+        c = parse("(?X\\NP)/?Y", env)
         assert parse(str(c)) is c  # 打印出的 ?<id> 能解析回同一变量
 
     @pytest.mark.parametrize(
         "bad",
-        ["", "S/", "/NP", "(S\\NP", "S\\NP)", "S//NP", "Foo", "NPX", "NP[", "S[dcl", "S[]", "S NP", "?", "?x"],
+        ["", "S/", "/NP", "(S\\NP", "S\\NP)", "S//NP", "Foo", "NPX", "X", "Q1", "NP[", "S[dcl", "S[]", "S NP", "?", "?x", "??X", "?X?Y"],
     )
     def test_parse_errors(self, bad):
         with pytest.raises(ValueError):
@@ -166,12 +167,12 @@ class TestComplexity:
             ("(S\\NP)/NP", 2, 0),
             ("((S\\NP)/PP)/NP", 3, 0),
             ("S/(S\\NP)", 1, 1),  # 类型提升
-            ("(S\\NP)/(S\\NP)", 1, 1),  # 助动词
-            ("((S\\NP)/(S\\NP))/NP", 2, 1),
+            ("(S\\NP)/(S\\NP)", 2, 1),  # 助动词：主语 NP + VP 论元
+            ("((S\\NP)/(S\\NP))/NP", 3, 1),
             ("(S/(S\\NP))/N", 2, 1),  # 提升后的限定词
             ("S/(S/(S\\NP))", 1, 2),
-            ("X/NP", 1, 0),  # 含变量按已知结构算（下界）
-            ("X", 0, 0),
+            ("?X/NP", 1, 0),  # 含变量按已知结构算（下界）
+            ("?X", 0, 0),
         ],
     )
     def test_arity_depth_complexity(self, text, ar, dp):
@@ -188,6 +189,13 @@ class TestComplexity:
         assert not is_admissible(parse("S/(((((S/NP)/NP)/NP)/NP)/NP)"))
         assert is_admissible(atom("S"))
         assert is_admissible(fresh_var())
+
+    def test_max_depth(self):
+        assert MAX_DEPTH == 3
+        assert is_admissible(parse("S/(S/(S/(S\\NP)))"))  # depth 3
+        assert not is_admissible(parse("S/(S/(S/(S/(S\\NP))))"))  # depth 4
+        # 结果位置内部超限同样不允许
+        assert not is_admissible(parse("(S/(S/(S/(S/(S\\NP)))))/NP"))
 
 
 class TestSubterms:
