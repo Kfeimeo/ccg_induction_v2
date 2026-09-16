@@ -1,0 +1,21 @@
+[project]
+name = "ccg-solver"
+version = "0.0.1"
+description = "从无标注句子集合中，把每个词的 CCG 范畴当作未知数解出来（约束求解，非统计归纳）"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q"
