@@ -1,4 +1,4 @@
-"""M1：组合规则。M0–M3 只开 > < >B <B，T 完全关掉。
+"""M1：组合规则。默认规则集 ``APPLICATION`` 只有 > <；``COMPOSITION`` 加 >B <B（M4 再开）；T 完全关掉。
 
 每条规则是 ``(left, right, state) -> Category | None``：在 ``state`` 上做必要的合一并返回结果范畴；
 不适用时返回 None。**规则不负责回滚**，调用方用 mark/rollback 包住。
@@ -42,9 +42,13 @@ def backward_composition(left: Category, right: Category, st: State) -> Category
     return None
 
 
-RULES: dict[str, Rule] = {
+APPLICATION: dict[str, Rule] = {
     ">": forward_application,
     "<": backward_application,
+}
+COMPOSITION: dict[str, Rule] = {
+    **APPLICATION,
     ">B": forward_composition,
     "<B": backward_composition,
 }
+RULES = APPLICATION  # M1–M3 默认
