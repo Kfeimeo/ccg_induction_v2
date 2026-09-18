@@ -136,9 +136,13 @@ class TestM2e_monotonicity:
     def test_final_D_subsumed_by_independent_D(self, runs):
         for solver, rep in runs.values():
             for i, s in enumerate(SENTS):
-                indep = [d.key for d in solve_sentence(s, Lexicon(), State())]
-                for d in solver.results[i].derivations:
-                    assert any(subsumes_key(g, d.key) for g in indep), (s, d.key)
+                indep = [d.key for d in solve_sentence(s, Lexicon(), State(complexity_bound=GOLD_L))]
+                final = [d.key for d in solver.results[i].derivations]
+                # 逐条 subsumption 是 O(|D|²) 次合一（|D| 最大 3990，全量要数小时），只对前三句做；其余比较规范键集
+                if i < 3:
+                    for k in final:
+                        assert any(subsumes_key(g, k) for g in indep), (s, k)
+                assert set(final) <= set(indep), s
 
 
 class TestIterativeDeepening:

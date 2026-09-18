@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import itertools
 import re
-import weakref
 from dataclasses import dataclass
 from typing import Iterator, Union
 
@@ -64,10 +63,11 @@ Category = Union[Atom, Var, Functor]
 # eq=False 让 dataclass 保留 object 的 __eq__/__hash__（按身份）；hash-cons 保证结构相等 ⇔ 身份相等。
 
 _atoms: dict[tuple[str, str | None], Atom] = {}
-# Var / Functor 用弱引用表：搜索过程会产生海量临时变量和模式，强引用表会无限增长（曾把 M2 跑到 OOM）。
-# 键用子项的 id：父项存活期间子项必然存活，id 不会被复用；父项一死条目自动消失。
-_vars: "weakref.WeakValueDictionary[int, Var]" = weakref.WeakValueDictionary()
-_functors: "weakref.WeakValueDictionary[tuple[int, str, int], Functor]" = weakref.WeakValueDictionary()
+# 强引用表：hash-cons 表只增不减，长跑会积累临时变量和模式（M5 的性能项）。
+# 试过 WeakValueDictionary：语义上可行（父项存活期间子项 id 不会复用），但在 pytest 下 __setitem__
+# 慢到把 30 句语料的测试从 30 秒拖到 10 分钟以上，先撤回。
+_vars: dict[int, Var] = {}
+_functors: dict[tuple[int, str, int], Functor] = {}
 _ids = itertools.count(1)
 
 
