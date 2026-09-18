@@ -154,3 +154,28 @@ def enumerate_trees(n: int, n_rules: int = len(APPLICATION)) -> int:
     """长度 n 的句子，规则集下的原始推导树数上界（Catalan(n-1) × n_rules^(n-1)）。"""
     c = comb(2 * (n - 1), n - 1) // n
     return c * n_rules ** (n - 1)
+
+
+# ---------------------------------------------------------------- M2：backbone + 投影（接口草案）
+
+
+@dataclass
+class SentenceResult:
+    derivations: list[Derivation]
+    backbone: dict[str, Category]  # 所有 σ 的最小公共泛化（joint lgg：跨词共享的变量保留）
+    projections: dict[str, frozenset]  # 词型 → 与某条 σ 一致的 ground 候选（域的子集）；无域时为空 dict
+
+    def apply_backbone(self, st: State) -> bool:
+        """把 backbone 并入全局状态（原子）。"""
+        raise NotImplementedError
+
+
+def lgg(patterns: list[tuple[Category, ...]]) -> tuple[Category, ...]:
+    """一组 σ 元组（同长）的最小公共泛化。不一致的位置换成新变量；相同的 (a, b) 对复用同一个变量，
+    因此跨词共享的结构（如 the 的论元 = cat 的范畴）被保留。"""
+    raise NotImplementedError
+
+
+def analyze_sentence(sent: Sentence, lex: Lexicon, st: State, **kw) -> SentenceResult:
+    """solve_sentence + backbone + 投影。``kw`` 透传给 solve_sentence。"""
+    raise NotImplementedError
