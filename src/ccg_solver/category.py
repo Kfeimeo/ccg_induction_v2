@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import itertools
 import re
+import weakref
 from dataclasses import dataclass
 from typing import Iterator, Union
 
@@ -63,8 +64,10 @@ Category = Union[Atom, Var, Functor]
 # eq=False 让 dataclass 保留 object 的 __eq__/__hash__（按身份）；hash-cons 保证结构相等 ⇔ 身份相等。
 
 _atoms: dict[tuple[str, str | None], Atom] = {}
-_vars: dict[int, Var] = {}
-_functors: dict[tuple[int, str, int], Functor] = {}
+# Var / Functor 用弱引用表：搜索过程会产生海量临时变量和模式，强引用表会无限增长（曾把 M2 跑到 OOM）。
+# 键用子项的 id：父项存活期间子项必然存活，id 不会被复用；父项一死条目自动消失。
+_vars: "weakref.WeakValueDictionary[int, Var]" = weakref.WeakValueDictionary()
+_functors: "weakref.WeakValueDictionary[tuple[int, str, int], Functor]" = weakref.WeakValueDictionary()
 _ids = itertools.count(1)
 
 

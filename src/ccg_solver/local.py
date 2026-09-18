@@ -132,9 +132,10 @@ def solve_sentence(
                         st.rollback(m)
 
     m0 = st.mark()
+    saved_checks, st.domain_checks = st.domain_checks, False  # 搜索期间不做域交集；推导完成时统一检查
     for tree, root in span(0, n):
         m = st.mark()
-        if st.unify(root, goal) and admissible():
+        if st.unify(root, goal) and admissible() and st.check_domains(local):
             names: dict[Var, str] = {}
             key = tuple(_canon(st.resolve(v), local, floor, names) for v in word_vars)
             d = found.get(key)
@@ -147,6 +148,7 @@ def solve_sentence(
                     d.tree = tree
         st.rollback(m)
     st.rollback(m0)
+    st.domain_checks = saved_checks
     return [found[k] for k in sorted(found)]
 
 
@@ -156,26 +158,61 @@ def enumerate_trees(n: int, n_rules: int = len(APPLICATION)) -> int:
     return c * n_rules ** (n - 1)
 
 
-# ---------------------------------------------------------------- M2：backbone + 投影（接口草案）
+# ---------------------------------------------------------------- M2：backbone + 投影
+
+from .domain import Domain, freshen  # noqa: E402
 
 
 @dataclass
 class SentenceResult:
     derivations: list[Derivation]
     backbone: dict[str, Category]  # 所有 σ 的最小公共泛化（joint lgg：跨词共享的变量保留）
-    projections: dict[str, frozenset]  # 词型 → 与某条 σ 一致的 ground 候选（域的子集）；无域时为空 dict
+    projections: dict[str, Domain]  # 词型 → 与某条 σ 相容的模式集（已与当前域取交）
+    _lex: Lexicon = field(default=None, repr=False)
 
     def apply_backbone(self, st: State) -> bool:
-        """把 backbone 并入全局状态（原子）。"""
-        raise NotImplementedError
+        """把 backbone 并入全局状态（原子）。共享变量用同一份重命名，保持跨词结构。"""
+        m = st.mark()
+        renames: dict[Var, Var] = {}
+        for w, pat in self.backbone.items():
+            if not st.unify(self._lex.var_of(w), freshen(pat, renames)):
+                st.rollback(m)
+                return False
+        return True
 
 
 def lgg(patterns: list[tuple[Category, ...]]) -> tuple[Category, ...]:
-    """一组 σ 元组（同长）的最小公共泛化。不一致的位置换成新变量；相同的 (a, b) 对复用同一个变量，
+    """一组 σ 元组（同长）的最小公共泛化。不一致的位置换成新变量；相同的项组合复用同一个变量，
     因此跨词共享的结构（如 the 的论元 = cat 的范畴）被保留。"""
-    raise NotImplementedError
+    table: dict[tuple, Var] = {}
+
+    def au(cs: tuple[Category, ...]) -> Category:
+        first = cs[0]
+        if all(c is first for c in cs):
+            return first
+        if isinstance(first, Functor) and all(isinstance(c, Functor) and c.slash == first.slash for c in cs):
+            return _functor(au(tuple(c.result for c in cs)), first.slash, au(tuple(c.arg for c in cs)))
+        key = tuple(id(c) for c in cs)
+        v = table.get(key)
+        if v is None:
+            v = table[key] = fresh_var()
+        return v
+
+    n = len(patterns[0])
+    return tuple(au(tuple(p[i] for p in patterns)) for i in range(n))
 
 
 def analyze_sentence(sent: Sentence, lex: Lexicon, st: State, **kw) -> SentenceResult:
-    """solve_sentence + backbone + 投影。``kw`` 透传给 solve_sentence。"""
-    raise NotImplementedError
+    """solve_sentence + backbone + 投影。``kw`` 透传给 solve_sentence。调用不改变 st。"""
+    ds = solve_sentence(sent, lex, st, **kw)
+    if not ds:
+        return SentenceResult([], {}, {}, lex)
+    words = list(dict.fromkeys(sent.words))
+    g = lgg([tuple(d.sigma[w] for w in words) for d in ds])
+    backbone = dict(zip(words, g))
+    projections: dict[str, Domain] = {}
+    for w in words:
+        pats = Domain(d.sigma[w] for d in ds)  # 先按规范形去重：|D| 可达数千，去重后每词几十到一百多
+        dom = st.domain(lex.var_of(w))
+        projections[w] = pats if dom is None else st.intersect(dom, pats)
+    return SentenceResult(ds, backbone, projections, lex)

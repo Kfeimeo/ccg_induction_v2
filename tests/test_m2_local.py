@@ -3,7 +3,7 @@
 设计决定（请确认）：
 1. backbone 是所有 σ 元组的最小公共泛化（anti-unification），跨词共享结构保留：
    若每条 σ 里 the 的论元都等于 cat 的范畴，backbone 里它们是同一个变量。
-2. projections[w] = 当前域中与某条 σ 的 w 位置模式一致（是其实例）的 ground 范畴。无域时不算。
+2. projections[w] = D 里 w 位置的模式集，与当前域取交（模式域，见 test_m2_domain）。无域时就是模式集本身。
 """
 from ccg_solver.category import Var, atom, free_vars, parse
 from ccg_solver.corpus import Lexicon, Sentence
@@ -62,10 +62,10 @@ class TestBackbone:
         r = analyze_sentence(Sentence.from_text("the cat sleeps ."), lex, st)
         assert len(r.derivations) > 1
         bb = r.backbone
-        # 所有 σ 的公共部分：sleeps 一定是 S[dcl]\?，the/cat 无共同结构
-        assert bb["sleeps"].slash == "\\" and bb["sleeps"].result is atom("S", "dcl")
-        assert isinstance(bb["sleeps"].arg, Var)
-        assert isinstance(bb["the"], Var) and isinstance(bb["cat"], Var)
+        # 数据：三个词全自由时 backbone 完全平凡（sleeps 也可以是原子：the=S/?, cat=?/?2, sleeps=?2）。
+        # 这正是只靠等式传播传不出信息、需要域过滤的原因（增补 3）。
+        assert all(isinstance(bb[w], Var) for w in ("the", "cat", "sleeps"))
+        assert len({bb[w] for w in bb}) == 3
 
     def test_backbone_is_implied_by_every_sigma(self):
         lex, st = Lexicon(), State()
@@ -95,35 +95,46 @@ class TestBackbone:
         assert isinstance(bb, Var)  # 14 个候选形状各异，没有公共结构
         lex, st = gold_state(skip=("sleeps",))
         r = analyze_sentence(Sentence.from_text("the cat sleeps ."), lex, st)
-        assert r.backbone["sleeps"] is parse("S[dcl]\\NP") or str(r.backbone["sleeps"]).startswith("S[dcl]")
+        # 两个 σ：S[dcl]\NP 与 (S[dcl]\(NP/N))\N（[the [cat sleeps]]），公共部分只有后向斜杠
+        assert {d.key[2] for d in r.derivations} == {"S[dcl]\\NP", "(S[dcl]\\(NP/N))\\N"}
+        assert r.backbone["sleeps"].slash == "\\"
+        assert isinstance(r.backbone["sleeps"].result, Var) and isinstance(r.backbone["sleeps"].arg, Var)
 
 
 class TestProjection:
-    def test_no_domain_no_projection(self):
+    def test_no_domain_projection_is_pattern_set(self):
         lex, st = gold_state(skip=("sees",))
         r = analyze_sentence(Sentence.from_text("the cat sees the dog ."), lex, st)
-        assert r.projections == {}
+        assert len(r.projections["sees"]) == 14
+        assert r.projections["the"] == {parse("NP/N")}
 
-    def test_projection_at_L2(self):
+    def test_projection_at_L2_via_global_bound(self):
         lex, st = gold_state(skip=("sees",))
-        st.set_domain(lex.var_of("sees"), set(enumerate_categories(2)))
+        st.complexity_bound = 2
         r = analyze_sentence(Sentence.from_text("the cat sees the dog ."), lex, st)
         assert r.projections["sees"] == {parse("(S[dcl]\\NP)/NP"), parse("(S[dcl]/NP)\\NP")}
 
     def test_projection_is_subset_of_domain_and_covers_gold(self):
         lex, st = Lexicon(), State()
-        dom = set(enumerate_categories(2))
-        sent = Sentence.from_text("the cat sees the dog .")
+        dom = set(enumerate_categories(1))
+        sent = Sentence.from_text("the cat sleeps .")
         for w in sent.words:
             st.set_domain(lex.var_of(w), dom)
         r = analyze_sentence(sent, lex, st)
-        for w in ("the", "cat", "sees", "dog"):
+        for w in ("the", "cat", "sleeps"):
             assert r.projections[w] <= dom
             assert parse(GOLD[w]) in r.projections[w]
-        assert len(r.projections["cat"]) < len(dom)  # 确实过滤了
+        # 三个词全自由时 L=1 的域挡不住任何东西（每个 ground 候选都有某条 σ 相容）：数据
+        assert len(r.projections["sleeps"]) == len(dom)
+        # 固定 the/cat 后 sleeps 的投影只剩 S[dcl]\NP（另一候选复杂度 2，不在 L=1 域内）
+        lex, st = gold_state(skip=("sleeps",))
+        st.set_domain(lex.var_of("sleeps"), dom)
+        r = analyze_sentence(sent, lex, st)
+        assert r.projections["sleeps"] == {parse("S[dcl]\\NP")}
 
     def test_projection_respects_existing_domain(self):
         lex, st = gold_state(skip=("sees",))
+        st.set_domain(lex.var_of("sees"), {parse("(S[dcl]\\NP)/NP"), parse("N")})
         st.set_domain(lex.var_of("sees"), {parse("(S[dcl]\\NP)/NP"), parse("N")})
         r = analyze_sentence(Sentence.from_text("the cat sees the dog ."), lex, st)
         assert r.projections["sees"] == {parse("(S[dcl]\\NP)/NP")}

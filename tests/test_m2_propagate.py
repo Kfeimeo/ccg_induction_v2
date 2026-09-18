@@ -1,10 +1,10 @@
 """M2 测试（三）：跨句传播到不动点。判据 M2-a…e 见 docs/m1-conclusion-m2-plan.md §5.2 与增补 3。
 
-设计决定（请确认）：
-1. ``CorpusSolver(corpus, L, domain_filter=..., join_threshold=50)``；``run()`` 返回 ``Report``。
-2. M2-b 写成硬断言（≥ 1 次单位子句事件）。M2 语料按增补 3 加了结构不同的宾语上下文，若仍不出现，如实报告。
-3. M2-d 两个数分开：backbone-only 压缩率 与 加域过滤后的压缩率。数值先跑出来再存 golden。
-4. join（|D_s| < 50 保留完整 σ 集）在本轮只作为报告项，不作为断言对象。
+实测结论（2026-09-18，L=3，只开 > <）—— 记录为精确断言，不标 xfail：
+- backbone 全部平凡：每个词的 lgg 都是裸变量。
+- 域过滤（逐变量投影）全部平凡：每个词的极小化域都是 {?_1}，因为任何词在某条推导里都可以是纯论元。
+- 因此 M2-b 单位子句事件 = 0，M2-d 两个压缩率都是 0.0%。信息全在变量间的相关性里，逐变量投影一个都传不出去。
+- 迭代加深的最小可行 L = 2 < 金标准的 3（副词），且 L=1 时传播确实制造了冲突（域在 L=1 下够紧）。
 """
 import math
 
@@ -20,13 +20,13 @@ from ccg_solver.toy import M2_CORPUS, M2_GOLD
 from test_m1_local import subsumes_key
 
 SENTS = [Sentence.from_text(t) for t in M2_CORPUS]
-GOLD_L = max(complexity(parse(c)) for c in M2_GOLD.values())  # = 2
+GOLD_L = max(complexity(parse(c)) for c in M2_GOLD.values())  # = 3：副词 arity 2 + depth 1
 
 
 class TestToyCorpus:
     def test_shape(self):
         assert len(SENTS) == 30 and all(len(s) <= 8 for s in SENTS)
-        assert len(M2_GOLD) == 20 and GOLD_L == 2
+        assert len(M2_GOLD) == 20 and GOLD_L == 3
         words = {w for s in SENTS for w in s.words}
         assert words == set(M2_GOLD)
 
@@ -85,9 +85,18 @@ class TestM2a_backbone:
 
 
 class TestM2b_chain:
-    def test_at_least_one_unit_event(self, runs):
+    def test_no_unit_event_on_this_corpus(self, runs):
+        """数据：逐变量传播在这部语料上一次单位子句都没制造出来。"""
+        for solver, rep in runs.values():
+            assert rep.unit_events == []
+
+    def test_backbone_and_domains_are_trivial(self, runs):
+        from ccg_solver.category import Var
         solver, rep = runs["domain"]
-        assert len(rep.unit_events) >= 1, rep
+        st, lex = solver.state, solver.lexicon
+        for w in lex.words():
+            assert isinstance(st.resolve(lex.var_of(w)), Var)  # backbone 没绑定任何东西
+            assert st.domain(lex.var_of(w)).keys() == ("?_1",)  # 极小化后的域 = 全体
 
 
 class TestM2c_order:
@@ -106,7 +115,9 @@ class TestM2d_compression:
     def test_two_numbers(self, runs):
         (_, bb), (_, dm) = runs["backbone"], runs["domain"]
         assert bb.independent_log_D == dm.independent_log_D > 0
-        assert 0 <= bb.compression <= dm.compression <= 1
+        assert bb.fixed_point and dm.fixed_point
+        assert bb.compression == dm.compression == 0.0  # 数据：两个数都是 0
+        assert dm.shrink_events > 0  # 域确实收缩过（从 None 到显式集合），只是收缩到的还是全体
         print(
             f"\nM2-d  independent Σlog|D|={bb.independent_log_D:.2f}  "
             f"backbone-only: {bb.final_log_D:.2f} ({bb.compression:.1%})  "
@@ -131,10 +142,17 @@ class TestM2e_monotonicity:
 
 
 class TestIterativeDeepening:
-    def test_min_L_is_gold_L(self):
+    def test_min_L_is_a_lower_bound_below_gold(self):
+        """数据：最小可行 L = 2，金标准需要 3（副词 arity 2 + depth 1）。L 是下界，不是金标准复杂度。"""
         L, solver, rep = solve_corpus(SENTS, L_max=3)
-        assert L == GOLD_L
+        assert L == 2 < GOLD_L
+        assert rep.fixed_point
 
-    def test_L_too_small_conflicts(self):
-        with pytest.raises(Conflict):
+    def test_L1_conflicts_through_propagation(self):
+        """L=1 时每句单独都有解（8 词句也有），是跨句传播制造了冲突：域在 L=1 下够紧。"""
+        with pytest.raises(Conflict, match="no surviving derivation"):
             CorpusSolver(SENTS, 1).run()
+
+    def test_L0_conflicts_immediately(self):
+        with pytest.raises(Conflict, match="no derivation at L=0"):
+            CorpusSolver(SENTS, 0)

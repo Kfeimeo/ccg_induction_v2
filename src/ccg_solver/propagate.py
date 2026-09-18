@@ -1,22 +1,25 @@
-"""M2：跨句传播 —— backbone + 域过滤 + 优先队列消元，迭代到不动点（接口草案）。
+"""M2：跨句传播 —— backbone + 域过滤 + 优先队列消元，迭代到不动点。
 
 ``CorpusSolver(corpus, L, domain_filter=True, join_threshold=50)``
-- 每个词型一个变量（``Lexicon``），每个变量的域初始化为 ``enumerate_categories(L)``。
-- 优先队列键 ``(未知变量数, 存活 σ 数, 句长, 句子序号)``，升序；``未知变量数`` = 句中 resolve 后仍含变量的词型数。
+- 每个词型一个变量（``Lexicon``）；``State(complexity_bound=L)``，L 是所有范畴变量的全局上界；
+  域初值 None（= L 下全体候选，隐式）。
+- 优先队列键 ``(未知变量数, 上次 |D|, 句长, 句子序号)``，升序。未知变量数 = 句中 resolve 后仍含变量的词型数。
 - 出队一句：``analyze_sentence`` 得 ``(D, backbone, projections)``。
-  - ``|D| = 0``：冲突，``run()`` 抛 ``Conflict``（M2 语料保证不会发生；决策/回溯是 M3）。
-  - ``|D| = 1``：单位子句，apply；若这是因为之前的传播把它压到 1 的，记一次 ``unit_events``。
-  - ``|D| > 1``：apply backbone；若 ``domain_filter``，域与 projections 取交集。
-  - 任一共享变量的**域收缩**或合并 → 含该变量的其他句子重新入队（不动点迭代）。
-- ``run()`` 返回 ``Report``；``results[i]`` 保留每句最后一次分析结果供 dump。
+  - ``|D| = 0``：冲突，抛 ``Conflict``（决策/回溯是 M3）。
+  - ``|D| = 1``：单位子句，apply；若上次分析时 |D| > 1，记一次 ``unit_events``。
+  - ``|D| > 1``：apply backbone；若 ``domain_filter``，每个词的域 ∩= 投影。
+  - 句中任一词型变量的绑定或域发生变化 → 含该变量的其他句子重新入队（不动点迭代）。
+- ``run()`` 结束后再扫一遍全部句子：若无任何变化则 ``fixed_point=True``。
+- join（|D_s| < join_threshold 时保留完整 σ 集）：本轮只记录 ``results[i].derivations``，不参与传播。
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import math
+from dataclasses import dataclass
 
 from .category import Category
 from .corpus import Lexicon, Sentence
-from .local import SentenceResult
+from .local import SentenceResult, analyze_sentence, solve_sentence
 from .state import State
 
 
@@ -26,36 +29,134 @@ class Conflict(Exception):
 
 @dataclass
 class Report:
-    order: list[int]  # 出队顺序（句子序号，可重复）
-    unit_events: list[int]  # 被传播压成单位子句的句子序号
-    shrink_events: int  # 域收缩次数
-    rounds: int  # 出队总次数
-    independent_log_D: float  # Σ log|D_s|，每句在空状态下独立求解
-    final_log_D: float  # Σ log|D_s|，不动点后
-    fixed_point: bool  # 结束时队列为空且再扫一遍无变化
+    order: list[int]
+    unit_events: list[int]
+    shrink_events: int
+    rounds: int
+    independent_log_D: float
+    final_log_D: float
+    fixed_point: bool
 
     @property
     def compression(self) -> float:
-        """1 - final/independent；independent 为 0 时定义为 0。"""
-        raise NotImplementedError
+        if self.independent_log_D == 0:
+            return 0.0
+        return 1.0 - self.final_log_D / self.independent_log_D
 
 
 class CorpusSolver:
     def __init__(self, corpus: list[Sentence], L: int, *, domain_filter: bool = True, join_threshold: int = 50):
-        raise NotImplementedError
+        self.corpus = list(corpus)
+        self.L = L
+        self.domain_filter = domain_filter
+        self.join_threshold = join_threshold
+        self.lexicon = Lexicon()
+        self.state = State(complexity_bound=L)
+        for s in self.corpus:
+            for w in s.words:
+                self.lexicon.var_of(w)
+        self._by_word: dict[str, set[int]] = {}
+        for i, s in enumerate(self.corpus):
+            for w in s.words:
+                self._by_word.setdefault(w, set()).add(i)
+        self.results: dict[int, SentenceResult] = {}
+        self._last_D: dict[int, int] = {}
+        self.independent: list[int] = []
+        for s in self.corpus:
+            n = len(solve_sentence(s, Lexicon(), State(complexity_bound=L)))
+            if n == 0:
+                raise Conflict(f"no derivation at L={L}: {s}")
+            self.independent.append(n)
 
-    lexicon: Lexicon
-    state: State
-    results: dict[int, SentenceResult]
+    # ------------------------------------------------------------ helpers
+    def _snapshot(self, words) -> dict:
+        st, lex = self.state, self.lexicon
+        return {w: (st.resolve(lex.var_of(w)), (d.keys() if (d := st.domain(lex.var_of(w))) is not None else None)) for w in words}
 
+    def _unknowns(self, s: Sentence) -> int:
+        from .category import free_vars
+        return sum(1 for w in dict.fromkeys(s.words) if free_vars(self.state.resolve(self.lexicon.var_of(w))))
+
+    def _key(self, i: int):
+        s = self.corpus[i]
+        return (self._unknowns(s), self._last_D.get(i, self.independent[i]), len(s), i)
+
+    def _process(self, i: int, rep_unit: list[int]) -> tuple[set[str], int]:
+        """分析并传播第 i 句。返回 (状态发生变化的词, 域收缩次数)。"""
+        s, st, lex = self.corpus[i], self.state, self.lexicon
+        words = list(dict.fromkeys(s.words))
+        before = self._snapshot(words)
+        r = analyze_sentence(s, lex, st)
+        n = len(r.derivations)
+        prev = self._last_D.get(i, self.independent[i])
+        self.results[i] = r
+        self._last_D[i] = n
+        if n == 0:
+            raise Conflict(f"sentence {i} has no surviving derivation: {s}")
+        if n == 1:
+            if prev > 1:
+                rep_unit.append(i)
+            if not r.derivations[0].apply(st):
+                raise Conflict(f"unit clause could not be applied: {s}")
+        else:
+            if not r.apply_backbone(st):
+                raise Conflict(f"backbone could not be applied: {s}")
+        shrinks = 0
+        if self.domain_filter:
+            for w, proj in r.projections.items():
+                res = st.restrict(lex.var_of(w), proj)
+                if res is None:
+                    raise Conflict(f"domain of {w!r} emptied by {s}")
+                shrinks += res
+        after = self._snapshot(words)
+        changed = {w for w in words if before[w] != after[w]}
+        return changed, shrinks
+
+    # ------------------------------------------------------------ main loop
     def run(self) -> Report:
-        raise NotImplementedError
+        pending = set(range(len(self.corpus)))
+        order: list[int] = []
+        unit_events: list[int] = []
+        shrink_events = 0
+        while pending:
+            i = min(pending, key=self._key)
+            pending.remove(i)
+            order.append(i)
+            changed, shrinks = self._process(i, unit_events)
+            shrink_events += shrinks
+            for w in changed:
+                pending |= self._by_word[w] - {i}
+        # 不动点校验：再扫一遍，任何变化都算未收敛
+        fixed = True
+        for i in range(len(self.corpus)):
+            changed, shrinks = self._process(i, [])
+            if changed or shrinks:
+                fixed = False
+        final = sum(math.log(len(self.results[i].derivations)) for i in range(len(self.corpus)))
+        indep = sum(math.log(n) for n in self.independent)
+        return Report(order, unit_events, shrink_events, len(order), indep, final, fixed)
 
     def dump(self) -> dict:
-        """notebook 用：每个词的 resolve 结果、域大小、每句 |D|。"""
-        raise NotImplementedError
+        st, lex = self.state, self.lexicon
+        dom_sizes = {}
+        for w in lex.words():
+            d = st.domain(lex.var_of(w))
+            dom_sizes[w] = None if d is None else len(d)
+        from .domain import canonical
+        return {
+            "lexicon": {w: canonical(st.resolve(lex.var_of(w))) for w in lex.words()},
+            "domain_sizes": dom_sizes,
+            "D_sizes": {i: len(r.derivations) for i, r in sorted(self.results.items())},
+        }
 
 
 def solve_corpus(corpus: list[Sentence], *, L_max: int = 4, **kw) -> tuple[int, CorpusSolver, Report]:
     """§4.6 迭代加深：L = 0,1,2,… 直到无冲突。返回最小可行 L。"""
-    raise NotImplementedError
+    last = None
+    for L in range(L_max + 1):
+        try:
+            solver = CorpusSolver(corpus, L, **kw)
+            return L, solver, solver.run()
+        except Conflict as e:
+            last = e
+    raise Conflict(f"no solution up to L={L_max}: {last}")
