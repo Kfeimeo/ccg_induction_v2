@@ -105,10 +105,22 @@ class TestM2c_order:
         b = CorpusSolver(SENTS, GOLD_L).run()
         assert a.order == b.order and a.unit_events == b.unit_events and a.final_log_D == b.final_log_D
 
-    def test_shortest_first(self, runs):
+    def test_nondegenerate_longest_first(self, runs):
+        """增补 4 §5：非退化句（n-1 > L）优先，按 n 降序；退化句排在其后。"""
         for solver, rep in runs.values():
             first = rep.order[0]
-            assert len(SENTS[first]) == min(len(s) for s in SENTS)
+            assert len(SENTS[first]) == max(len(s) for s in SENTS) == 7
+            first_pass = rep.order[: len(SENTS)]
+            degen = [solver.degenerate(i) for i in first_pass]
+            assert degen == sorted(degen)  # 所有非退化句先于所有退化句出队
+            nd_lens = [len(SENTS[i]) for i, d in zip(first_pass, degen) if not d]
+            assert nd_lens == sorted(nd_lens, reverse=True)
+
+    def test_degenerate_split(self, runs):
+        solver, _ = runs["domain"]
+        nd = [i for i in range(len(SENTS)) if not solver.degenerate(i)]
+        assert len(nd) == 12 and all(len(SENTS[i]) >= GOLD_L + 2 for i in nd)
+        assert len(nd) * 3 >= len(SENTS)  # 增补 4 §7：非退化句至少占三分之一
 
 
 class TestM2d_compression:

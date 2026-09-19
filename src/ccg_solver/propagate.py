@@ -3,7 +3,11 @@
 ``CorpusSolver(corpus, L, domain_filter=True, join_threshold=50)``
 - 每个词型一个变量（``Lexicon``）；``State(complexity_bound=L)``，L 是所有范畴变量的全局上界；
   域初值 None（= L 下全体候选，隐式）。
-- 优先队列键 ``(未知变量数, 上次 |D|, 句长, 句子序号)``，升序。未知变量数 = 句中 resolve 后仍含变量的词型数。
+- 优先队列（增补 4 §5）：非退化句（n-1 > L）优先，其中按 n 降序；退化句排在其后。同组内再按
+  ``(未知变量数, 上次 |D|, 句子序号)`` 升序。
+- ``degenerate(i)``：n-1 ≤ L（§5.5）。退化句上 backbone / 域过滤 / join 恒为零，只做单位子句检查。
+- 句对 join（``join=True``）：对非退化且 ``|D| < join_threshold`` 的句子保留完整 σ 集；两句共享词型时做
+  σ 元组级 mgu 关系交，互相剪掉没有相容伙伴的 σ；迭代到不动点。``Report.join_log_D`` 是 join 后的 Σ log|D_s|。
 - 出队一句：``analyze_sentence`` 得 ``(D, backbone, projections)``。
   - ``|D| = 0``：冲突，抛 ``Conflict``（决策/回溯是 M3）。
   - ``|D| = 1``：单位子句，apply；若上次分析时 |D| > 1，记一次 ``unit_events``。
@@ -27,6 +31,11 @@ class Conflict(Exception):
     pass
 
 
+def join_pair(Da, Db, shared: set[str], st: State):
+    """句对 join：返回 (keep_a, keep_b)，各自保留至少有一个相容伙伴的 σ。不改变 st。"""
+    raise NotImplementedError
+
+
 @dataclass
 class Report:
     order: list[int]
@@ -36,6 +45,7 @@ class Report:
     independent_log_D: float
     final_log_D: float
     fixed_point: bool
+    join_log_D: float = float("nan")  # join 后的 Σ log|D_s|（join=False 时等于 final_log_D）
 
     @property
     def compression(self) -> float:
@@ -45,10 +55,19 @@ class Report:
 
 
 class CorpusSolver:
-    def __init__(self, corpus: list[Sentence], L: int, *, domain_filter: bool = True, join_threshold: int = 50):
+    def __init__(
+        self,
+        corpus: list[Sentence],
+        L: int,
+        *,
+        domain_filter: bool = True,
+        join: bool = False,
+        join_threshold: int = 200,
+    ):
         self.corpus = list(corpus)
         self.L = L
         self.domain_filter = domain_filter
+        self.join = join
         self.join_threshold = join_threshold
         self.lexicon = Lexicon()
         self.state = State(complexity_bound=L)
@@ -77,9 +96,12 @@ class CorpusSolver:
         from .category import free_vars
         return sum(1 for w in dict.fromkeys(s.words) if free_vars(self.state.resolve(self.lexicon.var_of(w))))
 
+    def degenerate(self, i: int) -> bool:
+        return len(self.corpus[i]) - 1 <= self.L
+
     def _key(self, i: int):
         s = self.corpus[i]
-        return (self._unknowns(s), self._last_D.get(i, self.independent[i]), len(s), i)
+        return (self.degenerate(i), -len(s), self._unknowns(s), self._last_D.get(i, self.independent[i]), i)
 
     def _process(self, i: int, rep_unit: list[int]) -> tuple[set[str], int]:
         """分析并传播第 i 句。返回 (状态发生变化的词, 域收缩次数)。"""
