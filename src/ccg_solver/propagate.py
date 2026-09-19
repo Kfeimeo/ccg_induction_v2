@@ -31,9 +31,63 @@ class Conflict(Exception):
     pass
 
 
-def join_pair(Da, Db, shared: set[str], st: State):
-    """句对 join：返回 (keep_a, keep_b)，各自保留至少有一个相容伙伴的 σ。不改变 st。"""
-    raise NotImplementedError
+def _restricted(d, shared):
+    """σ 在共享词上的规范键（局部变量按首次出现重命名），作为相容性备忘的键。"""
+    names: dict = {}
+    return tuple(_canon(d.sigma[w], d._floor, names) for w in shared)
+
+
+def _canon(c, floor, names):
+    from .category import Functor, Var
+    if isinstance(c, Var):
+        if c.id < floor:
+            return str(c)  # 调用前已存在的全局变量：跨句共享，原样
+        n = names.get(c)
+        if n is None:
+            n = names[c] = f"?_{len(names) + 1}"
+        return n
+    if isinstance(c, Functor):
+        r, a = _canon(c.result, floor, names), _canon(c.arg, floor, names)
+        if isinstance(c.result, Functor):
+            r = f"({r})"
+        if isinstance(c.arg, Functor):
+            a = f"({a})"
+        return f"{r}{c.slash}{a}"
+    return str(c)
+
+
+def _compatible(da, db, shared, st: State) -> bool:
+    """σa 与 σb 在共享词上元组级相容：各自 freshen 局部变量（σ 内共享保持共享）后逐词合一全部成功。"""
+    from .local import _freshen
+    m = st.mark()
+    saved, st.domain_checks = st.domain_checks, False
+    ra: dict = {}
+    rb: dict = {}
+    ok = all(st.unify(_freshen(da.sigma[w], da._floor, ra), _freshen(db.sigma[w], db._floor, rb)) for w in shared)
+    st.domain_checks = saved
+    st.rollback(m)
+    return ok
+
+
+def join_pair(Da, Db, shared, st: State):
+    """句对 join：返回 (keep_a, keep_b)，各自保留至少有一个相容伙伴的 σ。不改变 st。结果确定、对称。"""
+    shared = sorted(shared)
+    if not shared or not Da or not Db:
+        return list(Da), list(Db)
+    memo: dict[tuple, bool] = {}
+    ka = [_restricted(d, shared) for d in Da]
+    kb = [_restricted(d, shared) for d in Db]
+    alive_a = [False] * len(Da)
+    alive_b = [False] * len(Db)
+    for i, da in enumerate(Da):
+        for j, db in enumerate(Db):
+            key = (ka[i], kb[j])
+            ok = memo.get(key)
+            if ok is None:
+                ok = memo[key] = _compatible(da, db, shared, st)
+            if ok:
+                alive_a[i] = alive_b[j] = True
+    return [d for d, a in zip(Da, alive_a) if a], [d for d, b in zip(Db, alive_b) if b]
 
 
 @dataclass
@@ -156,7 +210,34 @@ class CorpusSolver:
                 fixed = False
         final = sum(math.log(len(self.results[i].derivations)) for i in range(len(self.corpus)))
         indep = sum(math.log(n) for n in self.independent)
-        return Report(order, unit_events, shrink_events, len(order), indep, final, fixed)
+        joined = self._join_phase() if self.join else final
+        return Report(order, unit_events, shrink_events, len(order), indep, final, fixed, joined)
+
+    def _join_phase(self) -> float:
+        """句对 join 到不动点：只对非退化且 |D| < join_threshold 的句子；剪掉的 σ 从 results 移除。"""
+        cands = [i for i in range(len(self.corpus)) if not self.degenerate(i) and self.independent[i] < self.join_threshold]
+        pairs = []
+        for a in range(len(cands)):
+            for b in range(a + 1, len(cands)):
+                i, j = cands[a], cands[b]
+                shared = set(self.corpus[i].words) & set(self.corpus[j].words)
+                if shared:
+                    pairs.append((i, j, shared))
+        self.join_events: list[tuple[int, int, int, int]] = []  # (i, j, 剪掉的 σ 数 i, 剪掉的 σ 数 j)
+        changed = True
+        while changed:
+            changed = False
+            for i, j, shared in pairs:
+                Da, Db = self.results[i].derivations, self.results[j].derivations
+                ka, kb = join_pair(Da, Db, shared, self.state)
+                if len(ka) < len(Da) or len(kb) < len(Db):
+                    self.join_events.append((i, j, len(Da) - len(ka), len(Db) - len(kb)))
+                    self.results[i].derivations = ka
+                    self.results[j].derivations = kb
+                    changed = True
+                if not ka or not kb:
+                    raise Conflict(f"join emptied D of sentence pair {i},{j}")
+        return sum(math.log(len(self.results[i].derivations)) for i in range(len(self.corpus)))
 
     def dump(self) -> dict:
         st, lex = self.state, self.lexicon

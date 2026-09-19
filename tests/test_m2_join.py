@@ -117,6 +117,12 @@ class TestJoinInCorpus:
     def test_three_numbers(self, joined):
         solver, rep = joined
         assert rep.join_log_D <= rep.final_log_D <= rep.independent_log_D
+        # 数据（2026-09-19，L=3，阈值 200，只有 5 个 5 词句参与）：join 是非零的，但只作用于少数句子
+        assert rep.final_log_D == rep.independent_log_D  # backbone / 域过滤仍是 0
+        assert round(1 - rep.join_log_D / rep.independent_log_D, 3) == 0.015
+        pruned = {i: len(solver.results[i].derivations) for i in (5, 6, 11, 15, 22)}
+        assert pruned == {5: 61, 6: 61, 11: 112, 15: 125, 22: 115}
+        assert rep.join_log_D < rep.final_log_D
         joined_sents = [i for i in range(len(SENTS)) if not solver.degenerate(i) and solver.independent[i] < 200]
         print(
             f"\nM2-d  independent={rep.independent_log_D:.2f}  backbone/domain={rep.final_log_D:.2f}  "
