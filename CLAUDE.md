@@ -265,7 +265,7 @@ return best
 
 工程约定：
 - 包名 `ccg_solver`，源码在 `src/ccg_solver/`，测试在 `tests/`，按里程碑命名（`test_m0_*.py`）。
-- 运行测试：`pytest`（`pyproject.toml` 已把 `src` 加进 `pythonpath`，无需安装）。
+- 运行测试：`pytest`（`pyproject.toml` 已把 `src` 加进 `pythonpath`，无需安装）。默认跳过 `slow` 标记的 golden 慢测试，`pytest -m slow` 单独跑。
 
 ---
 

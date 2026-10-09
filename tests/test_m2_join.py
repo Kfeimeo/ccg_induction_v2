@@ -136,3 +136,27 @@ class TestJoinInCorpus:
         for i, s in enumerate(SENTS):
             indep = {d.key for d in solve_sentence(s, Lexicon(), State(complexity_bound=GOLD_L))}
             assert {d.key for d in solver.results[i].derivations} <= indep
+
+
+@pytest.mark.slow
+def test_golden_join_threshold_800():
+    """慢测试（约 1 分钟）：阈值 800 让 3 个 6 词句（|D|=720）参与；7 词句（3990）仍不参与。
+    数据（2026-10-04，L=3）：join 把两个 6 词句从 720 剪到 346 / 253，剪它们的全是两个 5 词最小对，
+    方向单向（6 词句没剪掉任何 5 词句的 σ）。整体 Σ log|D| 下降 3.1%，只算参与句子 6.5%。"""
+    solver = CorpusSolver(SENTS, GOLD_L, domain_filter=True, join=True, join_threshold=800)
+    rep = solver.run()
+    assert rep.fixed_point
+    assert rep.final_log_D == rep.independent_log_D
+    assert round(1 - rep.join_log_D / rep.independent_log_D, 3) == 0.031
+    joined = {i: len(solver.results[i].derivations) for i in range(len(SENTS))
+              if not solver.degenerate(i) and solver.independent[i] < 800}
+    assert joined == {5: 61, 6: 61, 8: 346, 11: 112, 14: 208, 15: 125, 16: 253, 22: 115, 23: 207, 27: 208}
+    # 剪枝事件：(i, j, 剪掉的 σ 数 i, 剪掉的 σ 数 j)。6 词句（8, 16）只被剪，不剪别人
+    assert solver.join_events == [
+        (5, 6, 66, 66), (5, 8, 0, 346), (5, 11, 0, 15), (5, 15, 0, 2), (5, 16, 0, 435),
+        (5, 22, 0, 10), (6, 8, 0, 28), (6, 16, 0, 32), (6, 22, 0, 2), (16, 23, 0, 1),
+    ]
+    # 只算参与句子：53.39 -> 49.90，6.5%
+    sub_before = sum(math.log(solver.independent[i]) for i in joined)
+    sub_after = sum(math.log(n) for n in joined.values())
+    assert round(1 - sub_after / sub_before, 3) == 0.065
