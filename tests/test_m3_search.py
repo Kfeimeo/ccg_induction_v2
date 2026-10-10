@@ -172,11 +172,22 @@ class TestIterativeDeepening:
 
 
 @pytest.mark.slow
-def test_full_toy_corpus_pass_line():
-    sol = BranchAndBound(SENTS, L=3).run()
+def test_full_toy_corpus_anytime_optimum_is_wide_grammar():
+    """30 句语料穷尽搜索不可行（7 词句根节点 3990 条 σ，25 分钟无果）。node_limit=1500 的 anytime 解
+    （约 30 秒）仍是 WIDE 型语法：distinct 4、复杂度 18、γ 0，总代价 22；金标准 distinct 7、复杂度 18，总 25。"""
+    bb = BranchAndBound(SENTS, L=3, node_limit=1500)
+    sol = bb.run()
     acc, renamed = accuracy(sol.lexicon, M2_GOLD)
-    print(f"\nM3 toy-30: acc={acc:.2f} total={sol.total:.2f} nodes={sol}")
-    assert renamed["the"] == "NP/N" and renamed["sleeps"] == "S[dcl]\\NP" and renamed["sees"] == "(S[dcl]\\NP)/NP"
+    print(f"\nM3 toy-30: acc={acc:.2f} total={sol.total:.2f} {bb.stats} lexicon={renamed}")
+    assert sol.cost == Cost(20, 4, 18, 0.0) and sol.total == 22.0
+    assert acc == 0.0
+    assert {sol.lexicon[w] for w in ("john", "mary", "dogs", "cats", "birds", "a")} == {"S[dcl]"}
+    from ccg_solver.corpus import Lexicon
+    from ccg_solver.state import State
+    lex, st = Lexicon(), State(complexity_bound=3)
+    for w, c in M2_GOLD.items():
+        assert lex.bind(st, w, parse(c))
+    assert corpus_cost(SENTS, lex, st) == Cost(20, 7, 18, 0.0)
 
 
 def _childes():
