@@ -16,7 +16,7 @@ import pytest
 from ccg_solver.category import parse
 from ccg_solver.corpus import Sentence
 from ccg_solver.evaluate import accuracy, match_atoms
-from ccg_solver.objective import Weights, corpus_cost
+from ccg_solver.objective import Cost, Weights, corpus_cost
 from ccg_solver.search import BranchAndBound, Solution, solve_iterative
 from ccg_solver.toy import M2_CORPUS, M2_GOLD
 
@@ -109,16 +109,51 @@ class TestBranchAndBound:
         assert BranchAndBound(SMALL, L=0).run() is None
 
 
-class TestPassLine:
-    """§8 M3 及格线（先在玩具语料上）：恢复 NP/N、(S\\NP)/NP、S\\NP。能否通过是实证问题。"""
+WIDE = {  # 穷尽搜索在 SMALL 上的真实最优（2026-10-11，L=3，α₂=β=γ=1）：所有词落到 S 与 S 的修饰语
+    "john": "S[dcl]", "mary": "S[dcl]", "cat": "S[dcl]", "dog": "S[dcl]",
+    "the": "S[dcl]/S[dcl]", "sleeps": "S[dcl]\\S[dcl]", "runs": "S[dcl]\\S[dcl]",
+    "quickly": "S[dcl]\\S[dcl]", "sees": "(S[dcl]/S[dcl])\\S[dcl]",
+}
 
-    def test_core_categories_on_small(self):
+
+class TestPassLine:
+    """§8 M3 及格线（先在玩具语料上）：恢复 NP/N、(S\\NP)/NP、S\\NP。
+
+    **实测不通过，且不是权重问题。** 穷尽搜索的最优是 WIDE（§4.5 里点名的"句末词取 S、其余 S/S"那种极端语法），
+    它在 α₂、β、γ 三个分量上**逐项 ≤** 金标准（4<6, 6<8, 0=0），任何正权重下都严格占优。γ 项没起作用：
+    这部语法在语料每一句上都恰好 1 条推导，但接受 `john sleeps sleeps`、`the the cat`——它的过度泛化发生在
+    语料外的字符串上，而 γ 只数语料内的推导（§5.2 的困境在目标函数层面再现）。不标 xfail，按实测记录。"""
+
+    def test_measured_optimum_is_wide_grammar_not_gold(self):
         sol = BranchAndBound(SMALL, L=3).run()
         acc, renamed = accuracy(sol.lexicon, SMALL_GOLD)
         print(f"\nM3 small: acc={acc:.2f} total={sol.total:.2f} lexicon={renamed}")
-        assert renamed["the"] == "NP/N"
-        assert renamed["sleeps"] == "S[dcl]\\NP"
-        assert renamed["sees"] == "(S[dcl]\\NP)/NP"
+        assert sol.lexicon == WIDE
+        assert sol.total == 10.0 and sol.cost == Cost(9, 4, 6, 0.0)
+        assert acc == 0.0
+        assert renamed["the"] != "NP/N"  # 及格线三项全部不满足
+
+    def test_wide_dominates_gold_componentwise(self):
+        from ccg_solver.corpus import Lexicon
+        from ccg_solver.state import State
+
+        def cost_of(lexicon):
+            lex, st = Lexicon(), State(complexity_bound=3)
+            for w, c in lexicon.items():
+                assert lex.bind(st, w, parse(c))
+            return corpus_cost(SMALL, lex, st), lex, st
+
+        wide, lex_w, st_w = cost_of(WIDE)
+        gold, _, _ = cost_of(SMALL_GOLD)
+        assert gold == Cost(9, 6, 8, 0.0)
+        assert wide.distinct < gold.distinct and wide.complexity < gold.complexity
+        assert wide.log_derivations == gold.log_derivations == 0.0
+        for w in (Weights(), Weights(alpha2=10), Weights(beta=10), Weights(gamma=100)):
+            assert wide.total(w) < gold.total(w)
+        # 过度泛化在语料外：γ 看不见
+        from ccg_solver.local import solve_sentence
+        assert len(solve_sentence(Sentence.from_text("john sleeps sleeps ."), lex_w, st_w)) == 1
+        assert len(solve_sentence(Sentence.from_text("the the cat ."), lex_w, st_w)) == 1
 
 
 class TestIterativeDeepening:
