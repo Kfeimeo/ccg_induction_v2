@@ -55,12 +55,18 @@ COMPOSITION: dict[str, Rule] = {
 
 def forward_composition2(left: Category, right: Category, st: State) -> Category | None:
     """二阶前向组合  X/Y  (Y/Z)/W  →  (X/Z)/W"""
-    raise NotImplementedError
+    x, y, z, w = fresh_var(), fresh_var(), fresh_var(), fresh_var()
+    if st.unify(left, fwd(x, y)) and st.unify(right, fwd(fwd(y, z), w)):
+        return fwd(fwd(x, z), w)
+    return None
 
 
 def backward_composition2(left: Category, right: Category, st: State) -> Category | None:
     """二阶后向组合  (Y\\Z)\\W  X\\Y  →  (X\\Z)\\W"""
-    raise NotImplementedError
+    x, y, z, w = fresh_var(), fresh_var(), fresh_var(), fresh_var()
+    if st.unify(left, bwd(bwd(y, z), w)) and st.unify(right, bwd(x, y)):
+        return bwd(bwd(x, z), w)
+    return None
 
 
 COMPOSITION2: dict[str, Rule] = {

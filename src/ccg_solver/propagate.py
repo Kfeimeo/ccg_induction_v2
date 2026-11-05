@@ -117,14 +117,16 @@ class CorpusSolver:
         domain_filter: bool = True,
         join: bool = False,
         join_threshold: int = 200,
+        profile=None,
     ):
+        self.profile = profile
         self.corpus = list(corpus)
         self.L = L
         self.domain_filter = domain_filter
         self.join = join
         self.join_threshold = join_threshold
         self.lexicon = Lexicon()
-        self.state = State(complexity_bound=L)
+        self.state = State(complexity_bound=L, profile=profile)
         for s in self.corpus:
             for w in s.words:
                 self.lexicon.var_of(w)
@@ -136,7 +138,7 @@ class CorpusSolver:
         self._last_D: dict[int, int] = {}
         self.independent: list[int] = []
         for s in self.corpus:
-            n = len(solve_sentence(s, Lexicon(), State(complexity_bound=L)))
+            n = len(solve_sentence(s, Lexicon(), State(complexity_bound=L, profile=profile)))
             if n == 0:
                 raise Conflict(f"no derivation at L={L}: {s}")
             self.independent.append(n)

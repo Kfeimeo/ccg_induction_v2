@@ -14,8 +14,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .category import Category
-from .rules import APPLICATION, Rule
+from .category import Category, Functor, MAX_ARITY, arity, depth, parse, register_atom, _functor, atom as _atom
+from .rules import APPLICATION, COMPOSITION2, Rule
 
 
 @dataclass(frozen=True)
@@ -28,19 +28,38 @@ class Profile:
     max_arity: int = 4
 
     def activate(self) -> "Profile":
-        return self  # 桩：实现时登记 extra_atoms
+        for a in self.extra_atoms:
+            register_atom(a)
+        self._defs()  # 预解析，顺便校验定义文本
+        return self
+
+    def _defs(self) -> dict:
+        cache = _DEF_CACHE.get(self.name)
+        if cache is None:
+            for a in self.extra_atoms:
+                register_atom(a)
+            parsed = {n: parse(t) for n, t in self.definitions.items()}
+            cache = _DEF_CACHE[self.name] = (parsed, {v: _atom(n) for n, v in parsed.items()})
+        return cache
 
     def definition(self, name: str) -> Category | None:
-        """已解析的定义（hash-cons），无定义返回 None。"""
-        raise NotImplementedError
+        return self._defs()[0].get(name)
 
     def fold(self, c: Category) -> Category:
-        """把等于某定义右边的子项换成该原子（自底向上，到不动点）。"""
-        raise NotImplementedError
+        if not self.definitions:
+            return c
+        rev = self._defs()[1]
+        if isinstance(c, Functor):
+            c = _functor(self.fold(c.result), c.slash, self.fold(c.arg))
+        return rev.get(c, c)
 
     def admissible(self, c: Category) -> bool:
-        """折叠后 arity ≤ max_arity 且 depth ≤ max_depth（整棵树）。"""
-        raise NotImplementedError
+        c = self.fold(c)
+        from .category import subterms
+        return all(arity(t) <= self.max_arity and depth(t) <= self.max_depth for t in subterms(c))
+
+
+_DEF_CACHE: dict[str, tuple] = {}
 
 
 LEGACY = Profile("legacy")
@@ -49,6 +68,6 @@ FIRST_ORDER_VP = Profile(
     "first_order_vp",
     extra_atoms=("VP",),
     definitions={"VP": "S[dcl]\\NP"},
-    rules={},  # 实现时填 COMPOSITION2
+    rules=COMPOSITION2,
     max_depth=0,
 )

@@ -97,8 +97,12 @@ def solve_sentence(
     *,
     rules: dict[str, Rule] | None = None,
     complexity_bound: int | None = None,
+    profile=None,
 ) -> list[Derivation]:
-    rules = APPLICATION if rules is None else rules
+    if profile is not None and profile is not st.profile:
+        raise ValueError("profile must match the State's profile")
+    prof = st.profile
+    rules = prof.rules if rules is None else rules
     word_vars = [lex.var_of(w) for w in sent.words]
     local = set(word_vars)
     floor = fresh_var().id  # 此后新建的变量都是局部的
@@ -111,7 +115,7 @@ def solve_sentence(
         # 解之间的取舍只能由 §4.5 的全局目标函数做。
         for v in local:
             c = st.resolve(v)
-            if not is_admissible(c):
+            if not (prof.admissible(c) if prof.definitions or prof.max_depth < 3 else is_admissible(c)):
                 return False
             if complexity_bound is not None and complexity(c) > complexity_bound:
                 return False

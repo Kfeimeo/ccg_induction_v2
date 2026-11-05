@@ -125,7 +125,7 @@ class TestRules:
     def test_backward_composition2(self):
         st = State(profile=P)
         r = backward_composition2(parse("(VP\\NP)\\PP"), parse("S[dcl]\\VP"), st)
-        assert st.resolve(r) is parse("(S[dcl]\\NP)\\PP")
+        assert st.resolve(r) is parse("VP\\PP")  # 折叠后
 
     def test_composition2_on_free_vars(self):
         st, env = State(profile=P), {}
@@ -170,10 +170,15 @@ class TestSymmetryUnderV2:
         lo = min(complexity(_cat(k)) for k in cands)
         minimal = {k for k in cands if complexity(_cat(k)) == lo}
         print(f"\nv2 sees candidates={sorted(cands)} minimal={minimal}")
-        assert "VP/NP" in cands
+        assert cands == {"VP/NP"}  # 数据：一阶 + VP 证据下 sees 唯一，主宾对称消失（LEGACY 下最小集有两个）
 
 
-GOLDEN_V2 = {}  # 实现后填：留出词在单句下的 (|D|, 树数)，与 LEGACY 的 GOLDEN_APPLICATION 对照
+# 留出词在单句下的 (|D|, 树数)。LEGACY 对照：the (2,2)、sees (14,14)、quickly (9,9)
+GOLDEN_V2 = {
+    ("the", "the cat sleeps ."): (2, 2),
+    ("sees", "the cat sees the dog ."): (2, 4),
+    ("quickly", "the cat sees the dog quickly ."): (4, 9),
+}
 
 
 @pytest.mark.parametrize("word, text", [("the", "the cat sleeps ."), ("sees", "the cat sees the dog ."), ("quickly", "the cat sees the dog quickly .")])

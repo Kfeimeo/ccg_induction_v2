@@ -80,7 +80,8 @@ def joint_canonical(cats: dict[str, Category]) -> dict[str, str]:
 class BranchAndBound:
     def __init__(self, corpus: list[Sentence], L: int, weights: Weights = Weights(), *,
                  propagate: bool = True, learn: bool = True, node_limit: int | None = None,
-                 incumbent: float | None = None):
+                 incumbent: float | None = None, profile=None):
+        self.profile = profile
         self.sents: list[Sentence] = list(dict.fromkeys(corpus))
         self.multiplicity = {i: corpus.count(s) for i, s in enumerate(self.sents)}
         self.L = L
@@ -89,7 +90,7 @@ class BranchAndBound:
         self.learn = learn
         self.node_limit = node_limit
         self.lexicon = Lexicon()
-        self.state = State(complexity_bound=L)
+        self.state = State(complexity_bound=L, profile=profile)
         self.words_of: list[list[str]] = []
         for s in self.sents:
             ws = list(dict.fromkeys(s.words))

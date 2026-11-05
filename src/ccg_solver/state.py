@@ -21,7 +21,9 @@ from .domain import Domain, canonical, freshen
 
 
 class State:
-    def __init__(self, complexity_bound: int | None = None) -> None:
+    def __init__(self, complexity_bound: int | None = None, profile=None) -> None:
+        from .profile import LEGACY
+        self.profile = LEGACY if profile is None else profile
         self._parent: dict[Var, Var] = {}  # 缺省：自己是代表元
         self._binding: dict[Var, Category] = {}  # 只在代表元上
         self._domain: dict[Var, Domain] = {}  # 只在代表元上；缺省 None
@@ -90,9 +92,13 @@ class State:
 
     # ------------------------------------------------------------ queries
     def resolve(self, c: Category) -> Category:
+        r = self._resolve(c)
+        return self.profile.fold(r) if self.profile.definitions else r
+
+    def _resolve(self, c: Category) -> Category:
         c = self._walk(c)
         if isinstance(c, Functor):
-            r, a = self.resolve(c.result), self.resolve(c.arg)
+            r, a = self._resolve(c.result), self._resolve(c.arg)
             if r is c.result and a is c.arg:
                 return c
             return _functor(r, c.slash, a)
@@ -220,9 +226,17 @@ class State:
 
     def _within_bound(self) -> bool:
         L = self.complexity_bound
-        if L is None:
+        p = self.profile
+        strict = p.max_depth < 3 or p.definitions  # LEGACY 下不在这里查可容许性，保持 M0–M3 行为
+        if L is None and not strict:
             return True
-        return all(complexity(self.resolve(v)) <= L for v in self._binding)
+        for v in self._binding:
+            r = self.resolve(v)
+            if L is not None and complexity(r) > L:
+                return False
+            if strict and not p.admissible(r):
+                return False
+        return True
 
     def _occurs(self, v: Var, c: Category) -> bool:
         return any(t is v for t in subterms(self.resolve(c)))
@@ -252,6 +266,13 @@ class State:
         if isinstance(b, Var):
             return self._bind_var(b, a)
         if isinstance(a, Atom) or isinstance(b, Atom):
+            # 定义原子（档案）：原子 vs 函子时展开再合一
+            defs = self.profile.definitions
+            if defs:
+                if isinstance(a, Atom) and isinstance(b, Functor) and a.feat is None and a.name in defs:
+                    return self._unify(self.profile.definition(a.name), b)
+                if isinstance(b, Atom) and isinstance(a, Functor) and b.feat is None and b.name in defs:
+                    return self._unify(a, self.profile.definition(b.name))
             return False
         assert isinstance(a, Functor) and isinstance(b, Functor)
         if a.slash != b.slash:

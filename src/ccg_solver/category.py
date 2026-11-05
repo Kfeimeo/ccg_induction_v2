@@ -21,7 +21,15 @@ import re
 from dataclasses import dataclass
 from typing import Iterator, Union
 
-ATOMS: tuple[str, ...] = ("S", "N", "NP", "PP", "conj")
+_BASE_ATOMS = ("S", "N", "NP", "PP", "conj")
+ATOMS: tuple[str, ...] = _BASE_ATOMS
+
+
+def register_atom(name: str) -> None:
+    """语法档案（profile）登记新原子名，幂等。"""
+    global ATOMS
+    if name not in ATOMS:
+        ATOMS = ATOMS + (name,)
 MAX_ARITY: int = 4
 MAX_DEPTH: int = 3
 
