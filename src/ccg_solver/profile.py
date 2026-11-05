@@ -28,7 +28,7 @@ class Profile:
     max_arity: int = 4
 
     def activate(self) -> "Profile":
-        raise NotImplementedError
+        return self  # 桩：实现时登记 extra_atoms
 
     def definition(self, name: str) -> Category | None:
         """已解析的定义（hash-cons），无定义返回 None。"""
