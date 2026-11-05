@@ -7,12 +7,14 @@
 import pytest
 
 from ccg_solver.category import Var, atom, fresh_var, parse
-from ccg_solver.rules import RULES, backward_application, backward_composition, forward_application, forward_composition
+from ccg_solver.rules import APPLICATION, COMPOSITION, RULES, backward_application, backward_composition, forward_application, forward_composition
 from ccg_solver.state import State
 
 
-def test_rule_set_has_no_type_raising():
-    assert set(RULES) == {">", "<", ">B", "<B"}
+def test_rule_sets():
+    assert set(APPLICATION) == {">", "<"}
+    assert set(COMPOSITION) == {">", "<", ">B", "<B"}
+    assert RULES is APPLICATION  # M1–M3 默认；T 不存在
 
 
 class TestApplication:

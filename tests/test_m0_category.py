@@ -67,7 +67,9 @@ class TestHashCons:
             parse("S/NP").arg = atom("N")  # type: ignore[misc]
 
     def test_atoms_fixed_set(self):
-        assert set(ATOMS) == {"S", "N", "NP", "PP", "conj"}
+        from ccg_solver.category import _BASE_ATOMS
+        assert _BASE_ATOMS == ("S", "N", "NP", "PP", "conj")
+        assert set(ATOMS) >= set(_BASE_ATOMS)  # 语法档案可以登记新原子（如 VP）
         with pytest.raises(ValueError):
             atom("Foo")
         assert isinstance(atom("conj"), Atom)
