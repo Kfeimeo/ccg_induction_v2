@@ -51,4 +51,21 @@ COMPOSITION: dict[str, Rule] = {
     ">B": forward_composition,
     "<B": backward_composition,
 }
+
+
+def forward_composition2(left: Category, right: Category, st: State) -> Category | None:
+    """二阶前向组合  X/Y  (Y/Z)/W  →  (X/Z)/W"""
+    raise NotImplementedError
+
+
+def backward_composition2(left: Category, right: Category, st: State) -> Category | None:
+    """二阶后向组合  (Y\\Z)\\W  X\\Y  →  (X\\Z)\\W"""
+    raise NotImplementedError
+
+
+COMPOSITION2: dict[str, Rule] = {
+    **COMPOSITION,
+    ">B2": forward_composition2,
+    "<B2": backward_composition2,
+}
 RULES = APPLICATION  # M1–M3 默认
