@@ -224,19 +224,51 @@ class State:
         self.rollback(m)
         return False
 
+    def enforce_first_order(self, c: Category) -> bool:
+        """一阶档案：论元位置上的函子必须**就是**某个定义原子——把它与匹配的定义右边合一（强制折叠）。
+        没有任何定义匹配 → False。定义形状两两不同时这是精确的；若多个定义都匹配，取第一个（记录为已知局限）。"""
+        p = self.profile
+        from .profile import _matches
+        rev = p._defs()[1]
+
+        def walk(t: Category, in_arg: bool) -> bool:
+            t = self._walk(t)
+            if not isinstance(t, Functor):
+                return True
+            if in_arg:
+                full = self._resolve(t)
+                for rhs, a in rev.items():
+                    if _matches(full, rhs):
+                        return self._unify(t, rhs)
+                return False
+            return walk(t.result, False) and walk(t.arg, True)
+
+        return walk(c, False)
+
     def _within_bound(self) -> bool:
         L = self.complexity_bound
         p = self.profile
         strict = p.max_depth < 3 or p.definitions  # LEGACY 下不在这里查可容许性，保持 M0–M3 行为
         if L is None and not strict:
             return True
-        for v in self._binding:
-            r = self.resolve(v)
-            if L is not None and complexity(r) > L:
-                return False
-            if strict and not p.admissible(r):
-                return False
-        return True
+        if getattr(self, "_enforcing", False):
+            return True
+        self._enforcing = True
+        try:
+            if p.max_depth == 0 and p.definitions:
+                for v in list(self._binding):
+                    if not self.enforce_first_order(self._binding[v]):
+                        return False
+            for v in self._binding:
+                r = self._resolve(v)
+                # L 界用乐观折叠的下界（结果位置的 (S[dcl]\?1)/?1 实例化后才能折成 VP/NP）；一阶结构已由强制折叠保证
+                if L is not None and (p.complexity_lb(r) if p.definitions else complexity(r)) > L:
+                    return False
+                if strict and not p.admissible(r):
+                    return False
+            return True
+        finally:
+            self._enforcing = False
 
     def _occurs(self, v: Var, c: Category) -> bool:
         return any(t is v for t in subterms(self.resolve(c)))

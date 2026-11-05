@@ -113,11 +113,15 @@ def solve_sentence(
     def admissible() -> bool:
         # 注意：complexity_bound 是对每个词的硬界（§4.6 迭代加深的 L），不是"偏好更简单"的逐词贪心；
         # 解之间的取舍只能由 §4.5 的全局目标函数做。
+        if prof.max_depth == 0 and prof.definitions:
+            for v in local:
+                if not st.enforce_first_order(v):  # 论元位置的函子强制折叠成定义原子
+                    return False
         for v in local:
-            c = st.resolve(v)
+            c = st._resolve(v)
             if not (prof.admissible(c) if prof.definitions or prof.max_depth < 3 else is_admissible(c)):
                 return False
-            if complexity_bound is not None and complexity(c) > complexity_bound:
+            if complexity_bound is not None and (prof.complexity_lb(c) if prof.definitions else complexity(c)) > complexity_bound:
                 return False
         return True
 

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .category import Category, Functor, MAX_ARITY, arity, depth, parse, register_atom, _functor, atom as _atom
+from .category import Category, Functor, Var, MAX_ARITY, arity, depth, parse, register_atom, _functor, atom as _atom
 from .rules import APPLICATION, COMPOSITION2, Rule
 
 
@@ -53,10 +53,40 @@ class Profile:
             c = _functor(self.fold(c.result), c.slash, self.fold(c.arg))
         return rev.get(c, c)
 
+    def fold_optimistic(self, c: Category) -> Category:
+        """乐观折叠：子项只要**能**与某个定义的右边合一（子项里的变量当通配）就按该原子计。
+        用于复杂度/可容许性的**下界**：含变量的模式可能在实例化后才折叠得起来（`(S[dcl]\\?1)/?1` → `VP/NP`），
+        按精确折叠算界会把金标准推导剪掉（不可容许）。"""
+        if not self.definitions:
+            return c
+        defs, rev = self._defs()
+        if isinstance(c, Functor):
+            c = _functor(self.fold_optimistic(c.result), c.slash, self.fold_optimistic(c.arg))
+            for rhs, a in rev.items():
+                if _matches(c, rhs):
+                    return a
+        elif isinstance(c, Var):
+            return c
+        return rev.get(c, c)
+
+    def complexity_lb(self, c: Category) -> int:
+        from .category import complexity
+        return complexity(self.fold_optimistic(c))
+
     def admissible(self, c: Category) -> bool:
-        c = self.fold(c)
+        """可容许性下界：乐观折叠后 arity ≤ max_arity 且 depth ≤ max_depth（整棵树）。"""
+        c = self.fold_optimistic(c)
         from .category import subterms
         return all(arity(t) <= self.max_arity and depth(t) <= self.max_depth for t in subterms(c))
+
+
+def _matches(sub: Category, rhs: Category) -> bool:
+    """sub（可含变量，变量当通配）是否能与 ground 的 rhs 合一。"""
+    if isinstance(sub, Var):
+        return True
+    if isinstance(sub, Functor):
+        return isinstance(rhs, Functor) and sub.slash == rhs.slash and _matches(sub.result, rhs.result) and _matches(sub.arg, rhs.arg)
+    return sub is rhs
 
 
 _DEF_CACHE: dict[str, tuple] = {}
